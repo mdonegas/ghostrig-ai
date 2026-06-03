@@ -31,7 +31,8 @@ namespace GhostRigAI.Editor
     /// <summary>
     /// Editor Window interface and main orchestrator loop for GhostRig AI.
     /// Coordinates Phase 1 (Vision Ingestion), Phase 2 (Neural Engine), Phase 3 (Kinematic Translation & Smoothing),
-    /// Phase 4 (Dexterity/Hand Crop), Phase 5 (Facial Audio/Audio2Face), and Phase 6 (Offline Physics Stepping & Tether IK).
+    /// Phase 4 (Dexterity/Hand Crop), Phase 5 (Facial Audio/Audio2Face), Phase 6 (Offline Physics Stepping & Tether IK),
+    /// and Phase 7 (Animation Curve Baker & Asset Exporter) in a unified offline processing loop.
     /// </summary>
     public class OfflineGhostRigBaker : EditorWindow
     {
@@ -43,7 +44,7 @@ namespace GhostRigAI.Editor
         private ModelAsset faceModel;
         private int targetFramerate = 30;
 
-        // Physical Avatar & Constraints (Phase 6)
+        // Physical Avatar & Constraints (Phase 6 & 7)
         private Animator avatar;
         private Vector3 anchorPoint = Vector3.zero;
         private float maxTetherLength = 5.0f;
@@ -295,15 +296,17 @@ namespace GhostRigAI.Editor
             VideoPlayer player = null;
             RenderTexture renderTexture = null;
             
-            // Engines representing all 6 phases
+            // Engines representing all phases
             SentisOfflineEngine bodyEngine = null;
             HandMicroCropper handEngine = null;
             AudioToBlendshapeEngine faceEngine = null;
             OfflinePhysicsSimulator physicsSimulator = new OfflinePhysicsSimulator();
+            GhostRigTelemetry telemetry = null;
 
             // Static Step Time for Temporal Smoothing & PhysX Stepping
             float stepTime = 1.0f / targetFramerate;
             OfflineKinematicSmoother poseSmoother = new OfflineKinematicSmoother();
+            List<MasterFrameState> poseHistory = new List<MasterFrameState>();
 
             try
             {
@@ -314,6 +317,16 @@ namespace GhostRigAI.Editor
 
                 statusText = "Setting up Physics Simulator...";
                 physicsSimulator.StartManualSimulation();
+
+                statusText = "Setting up Telemetry Visualizer...";
+                telemetry = avatar.gameObject.GetComponent<GhostRigTelemetry>();
+                if (telemetry == null)
+                {
+                    telemetry = avatar.gameObject.AddComponent<GhostRigTelemetry>();
+                }
+                telemetry.anchorPoint = anchorPoint;
+                telemetry.maxTetherLength = maxTetherLength;
+                telemetry.hipsTransform = avatar.GetBoneTransform(HumanBodyBones.Hips);
 
                 statusText = "Setting up Video Extractor...";
                 player = VideoFrameExtractor.SetupExtractor(sourceVideo, out renderTexture);
@@ -396,7 +409,6 @@ namespace GhostRigAI.Editor
                     {
                         FrameIndex = (int)frame,
                         TimeStamp = frame * stepTime,
-                        // Raw Hips position from prediction values (Joint 0)
                         HipsPosition = new Vector3(predictionValues[0], predictionValues[1], predictionValues[2])
                     };
 
@@ -449,6 +461,15 @@ namespace GhostRigAI.Editor
                         hipsTransform.localRotation = masterState.BoneRotations[HumanBodyBones.Hips];
                     }
 
+                    // Update visual telemetry in Scene View
+                    Transform leftWristTransform = avatar.GetBoneTransform(HumanBodyBones.LeftHand);
+                    Transform rightWristTransform = avatar.GetBoneTransform(HumanBodyBones.RightHand);
+                    telemetry.leftWristWorldPos = leftWristTransform != null ? leftWristTransform.position : Vector3.zero;
+                    telemetry.rightWristWorldPos = rightWristTransform != null ? rightWristTransform.position : Vector3.zero;
+
+                    // Append to baking history (Phase 7 Input)
+                    poseHistory.Add(masterState);
+
                     // Print progress validation log to Console
                     if (frame % 30 == 0 || frame == totalFrames - 1)
                     {
@@ -471,10 +492,15 @@ namespace GhostRigAI.Editor
 
                 if (isBaking)
                 {
+                    statusText = "Baking Animation Curves & Exporting Clip...";
+                    
+                    // Phase 7: Export the native animation clip asset
+                    AnimationClipBuilder.ExportAnimationClip(poseHistory, avatar, targetFramerate);
+
                     progress = 1.0f;
                     currentFrameIndex = totalFrames;
                     statusText = "Completed successfully!";
-                    Debug.Log($"[GhostRig AI] Offline Physics Baker completed. Processed: {totalFrames} frames in {stopwatch.Elapsed:mm\\:ss}.");
+                    Debug.Log($"[GhostRig AI] Offline Exporter completed. Processed: {totalFrames} frames in {stopwatch.Elapsed:mm\\:ss}.");
                 }
             }
             catch (Exception ex)
@@ -486,8 +512,15 @@ namespace GhostRigAI.Editor
             {
                 statusText = "Cleaning up resources...";
                 
-                // Restore auto-simulation state
+                // Restore auto-simulation state (Restores Physics.autoSimulation = true)
                 physicsSimulator.StopManualSimulation();
+
+                // Remove telemetry visualizer script from avatar
+                if (telemetry != null)
+                {
+                    if (Application.isPlaying) Destroy(telemetry);
+                    else DestroyImmediate(telemetry);
+                }
 
                 // Dispose of VideoPlayer resources
                 VideoFrameExtractor.Cleanup(player, renderTexture);
