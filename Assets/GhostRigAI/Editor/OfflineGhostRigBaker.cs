@@ -17,14 +17,29 @@ using GhostRigAI;
 namespace GhostRigAI.Editor
 {
     /// <summary>
+    /// Represents the compiled, unified multimodal frame state of the humanoid rig (body + fingers + facial blendshapes).
+    /// </summary>
+    public class MasterFrameState
+    {
+        public int FrameIndex;
+        public float TimeStamp;
+        public Dictionary<HumanBodyBones, Quaternion> BoneRotations = new Dictionary<HumanBodyBones, Quaternion>();
+        public Dictionary<string, float> BlendshapeWeights = new Dictionary<string, float>();
+    }
+
+    /// <summary>
     /// Editor Window interface and main orchestrator loop for GhostRig AI.
-    /// Manages Phase 1 (Vision Ingestion), Phase 2 (Neural Engine Inference), and Phase 3 (Kinematic Translation and Smoothing).
+    /// Coordinates Phase 1 (Vision Ingestion), Phase 2 (Neural Engine), Phase 3 (Kinematic Translation & Smoothing),
+    /// Phase 4 (Dexterity/Hand Crop), and Phase 5 (Facial Audio/Audio2Face) in a unified offline processing loop.
     /// </summary>
     public class OfflineGhostRigBaker : EditorWindow
     {
-        // System Inputs (Phase 1 & 2)
+        // System Inputs (Multimodal Pipelines)
         private VideoClip sourceVideo;
+        private AudioClip voiceTrack;
         private ModelAsset onnxModel;
+        private ModelAsset handModel;
+        private ModelAsset faceModel;
         private int targetFramerate = 30;
 
         // Ingestion & Inference State
@@ -50,7 +65,7 @@ namespace GhostRigAI.Editor
         public static void ShowWindow()
         {
             OfflineGhostRigBaker window = GetWindow<OfflineGhostRigBaker>("GhostRig AI - Offline Baker");
-            window.minSize = new Vector2(450, 520);
+            window.minSize = new Vector2(450, 580);
             window.Show();
         }
 
@@ -139,15 +154,21 @@ namespace GhostRigAI.Editor
 
         private void DrawConfiguration()
         {
-            GUILayout.Label("1. CONFIGURATION", sectionTitleStyle);
+            GUILayout.Label("1. MULTIMODAL CONFIGURATION", sectionTitleStyle);
 
             EditorGUI.BeginDisabledGroup(isBaking);
             
             GUILayout.BeginVertical(EditorStyles.helpBox);
             
             sourceVideo = (VideoClip)EditorGUILayout.ObjectField("Source Video Clip", sourceVideo, typeof(VideoClip), false);
-            onnxModel = (ModelAsset)EditorGUILayout.ObjectField("Neural Network Model", onnxModel, typeof(ModelAsset), false);
+            voiceTrack = (AudioClip)EditorGUILayout.ObjectField("Voice Track (Audio)", voiceTrack, typeof(AudioClip), false);
             
+            GUILayout.Space(5);
+            onnxModel = (ModelAsset)EditorGUILayout.ObjectField("Body Pose Model", onnxModel, typeof(ModelAsset), false);
+            handModel = (ModelAsset)EditorGUILayout.ObjectField("Hand Pose Model", handModel, typeof(ModelAsset), false);
+            faceModel = (ModelAsset)EditorGUILayout.ObjectField("Acoustic Face Model", faceModel, typeof(ModelAsset), false);
+            
+            GUILayout.Space(5);
             targetFramerate = EditorGUILayout.IntPopup("Target Framerate", targetFramerate, 
                 new string[] { "30 FPS", "60 FPS" }, 
                 new int[] { 30, 60 });
@@ -214,9 +235,9 @@ namespace GhostRigAI.Editor
         {
             GUILayout.FlexibleSpace();
 
-            if (sourceVideo == null || onnxModel == null)
+            if (sourceVideo == null || onnxModel == null || handModel == null || faceModel == null)
             {
-                EditorGUILayout.HelpBox("Please assign a source Video Clip and a Neural Network Model to begin baking.", MessageType.Info);
+                EditorGUILayout.HelpBox("Please assign all required assets (Video, Body, Hand, and Face models) to begin baking.", MessageType.Info);
                 return;
             }
 
@@ -225,7 +246,7 @@ namespace GhostRigAI.Editor
                 Color oldColor = GUI.backgroundColor;
                 GUI.backgroundColor = primaryColor;
                 
-                if (GUILayout.Button("▶ START PIPELINE BAKE", buttonStyle))
+                if (GUILayout.Button("▶ START MULTIMODAL PIPELINE BAKE", buttonStyle))
                 {
                     StartBakingProcess();
                 }
@@ -258,16 +279,22 @@ namespace GhostRigAI.Editor
 
             VideoPlayer player = null;
             RenderTexture renderTexture = null;
-            SentisOfflineEngine neuralEngine = null;
+            
+            // Engines representing all 5 phases
+            SentisOfflineEngine bodyEngine = null;
+            HandMicroCropper handEngine = null;
+            AudioToBlendshapeEngine faceEngine = null;
 
-            // Static Step Time for Offline Temporal Smoothing (Phase 3)
+            // Static Step Time for Temporal Smoothing (Phase 3)
             float stepTime = 1.0f / targetFramerate;
             OfflineKinematicSmoother poseSmoother = new OfflineKinematicSmoother();
 
             try
             {
-                statusText = "Setting up Neural Engine...";
-                neuralEngine = new SentisOfflineEngine(onnxModel);
+                statusText = "Setting up Neural Engines...";
+                bodyEngine = new SentisOfflineEngine(onnxModel);
+                handEngine = new HandMicroCropper(handModel);
+                faceEngine = new AudioToBlendshapeEngine(faceModel);
 
                 statusText = "Setting up Video Extractor...";
                 player = VideoFrameExtractor.SetupExtractor(sourceVideo, out renderTexture);
@@ -276,7 +303,7 @@ namespace GhostRigAI.Editor
                 await VideoFrameExtractor.PrepareVideoAsync(player);
 
                 totalFrames = (long)player.frameCount;
-                statusText = $"Starting Execution Loop ({totalFrames} frames)...";
+                statusText = $"Starting Multimodal Execution Loop ({totalFrames} frames)...";
 
                 // Initialize Kinematic Smoother history
                 poseSmoother.ResetHistory();
@@ -307,42 +334,87 @@ namespace GhostRigAI.Editor
                         continue;
                     }
 
-                    statusText = $"Preprocessing frame {frame}...";
+                    statusText = $"Processing Body Pose on frame {frame}...";
 
                     // Preprocess and Convert to Tensor (Phase 1 Output)
                     TensorFloat inputTensor = SentisTensorConverter.ConvertToTensor(renderTexture);
 
-                    statusText = $"Running Neural Inference on frame {frame}...";
+                    // Body Neural Engine Inference (Phase 2 Output)
+                    TensorFloat rawPredictions = bodyEngine.ProcessTensor(inputTensor);
 
-                    // Neural Engine Inference (Phase 2 Output)
-                    TensorFloat rawPredictions = neuralEngine.ProcessTensor(inputTensor);
-
-                    // Extract the raw predictions data
+                    // Extract the raw prediction coordinates back to CPU
                     float[] predictionValues = rawPredictions.DownloadToArray();
 
-                    statusText = $"Translating Kinematics & Smoothing frame {frame}...";
-
-                    // Phase 3: Kinematic Translator (Raw joint rotation Quaternions)
-                    Dictionary<HumanBodyBones, Quaternion> rawPose = PoseDecoder.DecodePose(predictionValues);
+                    // Phase 3: Kinematic Translator (Raw body joint rotation Quaternions)
+                    Dictionary<HumanBodyBones, Quaternion> rawBodyPose = PoseDecoder.DecodePose(predictionValues);
 
                     // Phase 3: Kinematic Smoother (One-Euro & Hermite Filtered rotations)
-                    Dictionary<HumanBodyBones, Quaternion> smoothedPose = poseSmoother.SmoothPose(rawPose, stepTime);
+                    Dictionary<HumanBodyBones, Quaternion> smoothedBodyPose = poseSmoother.SmoothPose(rawBodyPose, stepTime);
 
-                    // Print progress validation log to Console (including sample joint angles to check translation)
-                    if (frame % 30 == 0 || frame == totalFrames - 1)
+                    statusText = $"Cropping & Processing Hands on frame {frame}...";
+
+                    // Phase 4: Hand Micro-Cropper (Isolates left/right wrist coordinates from Phase 3 coordinates)
+                    // Joint 7: Left Wrist, Joint 10: Right Wrist. Extract normalized coordinates
+                    Vector2 leftWristCoords = new Vector2(
+                        Mathf.Clamp01(predictionValues[7 * 3 + 0]),
+                        Mathf.Clamp01(predictionValues[7 * 3 + 1])
+                    );
+                    Vector2 rightWristCoords = new Vector2(
+                        Mathf.Clamp01(predictionValues[10 * 3 + 0]),
+                        Mathf.Clamp01(predictionValues[10 * 3 + 1])
+                    );
+
+                    // Process both hands through the secondary hand pose worker
+                    Dictionary<HumanBodyBones, Quaternion> leftHandPose = handEngine.ProcessHand(renderTexture, leftWristCoords, true);
+                    Dictionary<HumanBodyBones, Quaternion> rightHandPose = handEngine.ProcessHand(renderTexture, rightWristCoords, false);
+
+                    statusText = $"Processing Facial Audio on frame {frame}...";
+
+                    // Phase 5: Facial Audio (Audio2Face)
+                    Dictionary<string, float> facePose = faceEngine.ProcessAudio(voiceTrack, (int)frame, targetFramerate);
+
+                    // 6. Compile the complete "Master Frame State"
+                    MasterFrameState masterState = new MasterFrameState
                     {
-                        string inputShapeStr = string.Join("x", inputTensor.shape);
-                        string outputShapeStr = string.Join("x", rawPredictions.shape);
-                        
-                        Quaternion rawSpine = rawPose.ContainsKey(HumanBodyBones.Spine) ? rawPose[HumanBodyBones.Spine] : Quaternion.identity;
-                        Quaternion smoothSpine = smoothedPose.ContainsKey(HumanBodyBones.Spine) ? smoothedPose[HumanBodyBones.Spine] : Quaternion.identity;
+                        FrameIndex = (int)frame,
+                        TimeStamp = frame * stepTime
+                    };
 
-                        Debug.Log($"[GhostRig AI] Frame {frame} successfully baked.\n" +
-                                  $"Input Shape: {inputShapeStr} | Output Shape: {outputShapeStr}\n" +
-                                  $"Raw Spine Euler: {rawSpine.eulerAngles} | Smooth Spine Euler: {smoothSpine.eulerAngles}");
+                    // Merge Body
+                    foreach (var kvp in smoothedBodyPose)
+                    {
+                        masterState.BoneRotations[kvp.Key] = kvp.Value;
+                    }
+                    // Merge Left Hand
+                    foreach (var kvp in leftHandPose)
+                    {
+                        masterState.BoneRotations[kvp.Key] = kvp.Value;
+                    }
+                    // Merge Right Hand
+                    foreach (var kvp in rightHandPose)
+                    {
+                        masterState.BoneRotations[kvp.Key] = kvp.Value;
+                    }
+                    // Merge Face Blendshapes
+                    foreach (var kvp in facePose)
+                    {
+                        masterState.BlendshapeWeights[kvp.Key] = kvp.Value;
                     }
 
-                    // CRITICAL: Memory Management (Disposing of unmanaged resources immediately)
+                    // Print progress validation log to Console
+                    if (frame % 30 == 0 || frame == totalFrames - 1)
+                    {
+                        Quaternion spine = masterState.BoneRotations.ContainsKey(HumanBodyBones.Spine) ? masterState.BoneRotations[HumanBodyBones.Spine] : Quaternion.identity;
+                        Quaternion finger = masterState.BoneRotations.ContainsKey(HumanBodyBones.LeftIndexProximal) ? masterState.BoneRotations[HumanBodyBones.LeftIndexProximal] : Quaternion.identity;
+                        float jawOpen = masterState.BlendshapeWeights.ContainsKey("jawOpen") ? masterState.BlendshapeWeights["jawOpen"] : 0.0f;
+
+                        Debug.Log($"[GhostRig AI] Frame {frame} Master State:\n" +
+                                  $"Spine Euler: {spine.eulerAngles} | " +
+                                  $"Left Index Proximal Euler: {finger.eulerAngles} | " +
+                                  $"Jaw Open Weight: {jawOpen:F2}");
+                    }
+
+                    // CRITICAL: Memory Management (Disposing of unmanaged body tensors immediately)
                     rawPredictions.Dispose();
                     inputTensor.Dispose();
 
@@ -355,7 +427,7 @@ namespace GhostRigAI.Editor
                     progress = 1.0f;
                     currentFrameIndex = totalFrames;
                     statusText = "Completed successfully!";
-                    Debug.Log($"[GhostRig AI] Offline Orchestration completed. Total processed: {totalFrames} frames in {stopwatch.Elapsed:mm\\:ss}.");
+                    Debug.Log($"[GhostRig AI] Offline Multimodal Orchestration completed. Processed: {totalFrames} frames in {stopwatch.Elapsed:mm\\:ss}.");
                 }
             }
             catch (Exception ex)
@@ -370,8 +442,10 @@ namespace GhostRigAI.Editor
                 // Dispose of VideoPlayer resources
                 VideoFrameExtractor.Cleanup(player, renderTexture);
                 
-                // Dispose of Neural Engine resources
-                neuralEngine?.Dispose();
+                // Dispose of all Neural Engine resources (all 3 models)
+                bodyEngine?.Dispose();
+                handEngine?.Dispose();
+                faceEngine?.Dispose();
                 
                 stopwatch.Stop();
                 isBaking = false;
