@@ -10,6 +10,7 @@ using UnityEditor;
 using UnityEngine.Video;
 using Unity.Sentis;
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using GhostRigAI;
 
@@ -17,7 +18,7 @@ namespace GhostRigAI.Editor
 {
     /// <summary>
     /// Editor Window interface and main orchestrator loop for GhostRig AI.
-    /// Manages Phase 1 (Vision Ingestion) and Phase 2 (Neural Engine Inference) sequentially.
+    /// Manages Phase 1 (Vision Ingestion), Phase 2 (Neural Engine Inference), and Phase 3 (Kinematic Translation and Smoothing).
     /// </summary>
     public class OfflineGhostRigBaker : EditorWindow
     {
@@ -259,6 +260,10 @@ namespace GhostRigAI.Editor
             RenderTexture renderTexture = null;
             SentisOfflineEngine neuralEngine = null;
 
+            // Static Step Time for Offline Temporal Smoothing (Phase 3)
+            float stepTime = 1.0f / targetFramerate;
+            OfflineKinematicSmoother poseSmoother = new OfflineKinematicSmoother();
+
             try
             {
                 statusText = "Setting up Neural Engine...";
@@ -272,6 +277,9 @@ namespace GhostRigAI.Editor
 
                 totalFrames = (long)player.frameCount;
                 statusText = $"Starting Execution Loop ({totalFrames} frames)...";
+
+                // Initialize Kinematic Smoother history
+                poseSmoother.ResetHistory();
 
                 // Master Loop
                 for (long frame = 0; frame < totalFrames; frame++)
@@ -312,15 +320,26 @@ namespace GhostRigAI.Editor
                     // Extract the raw predictions data
                     float[] predictionValues = rawPredictions.DownloadToArray();
 
-                    // Print progress validation log to Console
+                    statusText = $"Translating Kinematics & Smoothing frame {frame}...";
+
+                    // Phase 3: Kinematic Translator (Raw joint rotation Quaternions)
+                    Dictionary<HumanBodyBones, Quaternion> rawPose = PoseDecoder.DecodePose(predictionValues);
+
+                    // Phase 3: Kinematic Smoother (One-Euro & Hermite Filtered rotations)
+                    Dictionary<HumanBodyBones, Quaternion> smoothedPose = poseSmoother.SmoothPose(rawPose, stepTime);
+
+                    // Print progress validation log to Console (including sample joint angles to check translation)
                     if (frame % 30 == 0 || frame == totalFrames - 1)
                     {
                         string inputShapeStr = string.Join("x", inputTensor.shape);
                         string outputShapeStr = string.Join("x", rawPredictions.shape);
-                        Debug.Log($"[GhostRig AI] Frame {frame} successfully baked. " +
-                                  $"Input Tensor Shape: {inputShapeStr} | " +
-                                  $"Output Tensor Shape: {outputShapeStr} | " +
-                                  $"Predictions Size: {predictionValues.Length} values.");
+                        
+                        Quaternion rawSpine = rawPose.ContainsKey(HumanBodyBones.Spine) ? rawPose[HumanBodyBones.Spine] : Quaternion.identity;
+                        Quaternion smoothSpine = smoothedPose.ContainsKey(HumanBodyBones.Spine) ? smoothedPose[HumanBodyBones.Spine] : Quaternion.identity;
+
+                        Debug.Log($"[GhostRig AI] Frame {frame} successfully baked.\n" +
+                                  $"Input Shape: {inputShapeStr} | Output Shape: {outputShapeStr}\n" +
+                                  $"Raw Spine Euler: {rawSpine.eulerAngles} | Smooth Spine Euler: {smoothSpine.eulerAngles}");
                     }
 
                     // CRITICAL: Memory Management (Disposing of unmanaged resources immediately)
