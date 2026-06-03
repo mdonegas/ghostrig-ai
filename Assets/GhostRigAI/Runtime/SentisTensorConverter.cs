@@ -6,7 +6,7 @@
  */
 
 using UnityEngine;
-using Unity.Sentis;
+using Unity.InferenceEngine;
 using System;
 
 namespace GhostRigAI
@@ -24,8 +24,8 @@ namespace GhostRigAI
         /// Crops a source texture to a 1:1 ratio, resizes it to 256x256, and converts it to a 1x3x256x256 Sentis Tensor.
         /// </summary>
         /// <param name="sourceTexture">The raw source RenderTexture or Texture.</param>
-        /// <returns>A TensorFloat containing the normalized image data in NCHW format (1x3x256x256).</returns>
-        public static TensorFloat ConvertToTensor(Texture sourceTexture)
+        /// <returns>A Tensor<float> containing the normalized image data in NCHW format (1x3x256x256).</returns>
+        public static Tensor<float> ConvertToTensor(Texture sourceTexture)
         {
             if (sourceTexture == null)
             {
@@ -63,13 +63,14 @@ namespace GhostRigAI
             // Graphics.Blit with scale/offset maps: uv_source = uv_dest * scale + offset
             Graphics.Blit(sourceTexture, croppedRT, scale, offset);
 
-            TensorFloat tensor = null;
+            Tensor<float> tensor = null;
             try
             {
-                // Convert the RenderTexture to a Sentis TensorFloat
+                // Convert the RenderTexture to a Sentis Tensor<float>
                 // Layout is batch (1) x channels (3) x height (256) x width (256)
                 // Values are normalized to [0.0, 1.0] by default.
-                tensor = TextureConverter.ToTensor(croppedRT, TargetSize, TargetSize, TargetChannels);
+                tensor = new Tensor<float>(new TensorShape(1, TargetChannels, TargetSize, TargetSize));
+                TextureConverter.ToTensor(croppedRT, tensor);
             }
             catch (Exception ex)
             {

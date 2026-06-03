@@ -60,7 +60,7 @@ namespace GhostRigAI
         /// <summary>
         /// Adjusts the leg rotations to visually stretch or bend in response to the tether pull-back direction.
         /// </summary>
-        private void ApplyLegTension(Dictionary<HumanBodyBones, Quaternion> pose, Vector3 pullDirection)
+        private static void ApplyLegTension(Dictionary<HumanBodyBones, Quaternion> pose, Vector3 pullDirection)
         {
             // Rotate the upper legs to counter the pull direction and maintain structural balance
             Quaternion legCorrection = Quaternion.FromToRotation(Vector3.down, -pullDirection);

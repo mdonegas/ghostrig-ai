@@ -11,7 +11,6 @@ using UnityEditor;
 using System;
 using System.IO;
 using System.Collections.Generic;
-using GhostRigAI.Editor; // Reference MasterFrameState
 
 namespace GhostRigAI
 {

@@ -8,7 +8,7 @@
 using UnityEngine;
 using UnityEditor;
 using UnityEngine.Video;
-using Unity.Sentis;
+using Unity.InferenceEngine;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -16,18 +16,6 @@ using GhostRigAI;
 
 namespace GhostRigAI.Editor
 {
-    /// <summary>
-    /// Represents the compiled, unified multimodal frame state of the humanoid rig (body + fingers + facial blendshapes + root position).
-    /// </summary>
-    public class MasterFrameState
-    {
-        public int FrameIndex;
-        public float TimeStamp;
-        public Vector3 HipsPosition;
-        public Dictionary<HumanBodyBones, Quaternion> BoneRotations = new Dictionary<HumanBodyBones, Quaternion>();
-        public Dictionary<string, float> BlendshapeWeights = new Dictionary<string, float>();
-    }
-
     /// <summary>
     /// Editor Window interface and main orchestrator loop for GhostRig AI.
     /// Coordinates Phase 1 (Vision Ingestion), Phase 2 (Neural Engine), Phase 3 (Kinematic Translation & Smoothing),
@@ -369,10 +357,10 @@ namespace GhostRigAI.Editor
                     statusText = $"Processing Body Pose on frame {frame}...";
 
                     // Preprocess and Convert to Tensor (Phase 1 Output)
-                    TensorFloat inputTensor = SentisTensorConverter.ConvertToTensor(renderTexture);
+                    Tensor<float> inputTensor = SentisTensorConverter.ConvertToTensor(renderTexture);
 
                     // Body Neural Engine Inference (Phase 2 Output)
-                    TensorFloat rawPredictions = bodyEngine.ProcessTensor(inputTensor);
+                    Tensor<float> rawPredictions = bodyEngine.ProcessTensor(inputTensor);
 
                     // Extract the raw prediction coordinates back to CPU
                     float[] predictionValues = rawPredictions.DownloadToArray();

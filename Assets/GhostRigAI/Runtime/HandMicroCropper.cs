@@ -6,7 +6,7 @@
  */
 
 using UnityEngine;
-using Unity.Sentis;
+using Unity.InferenceEngine;
 using System;
 using System.Collections.Generic;
 
@@ -19,7 +19,7 @@ namespace GhostRigAI
     public class HandMicroCropper : IDisposable
     {
         private Model runtimeModel;
-        private IWorker worker;
+        private Worker worker;
         private const int TargetSize = 256;
         private const int TargetChannels = 3;
 
@@ -35,7 +35,7 @@ namespace GhostRigAI
             }
 
             runtimeModel = ModelLoader.Load(handModelAsset);
-            worker = WorkerFactory.CreateWorker(BackendType.GPUCompute, runtimeModel);
+            worker = new Worker(runtimeModel, BackendType.GPUCompute);
         }
 
         /// <summary>
@@ -74,20 +74,21 @@ namespace GhostRigAI
 
             Graphics.Blit(sourceFrame, croppedRT, scale, offset);
 
-            TensorFloat inputTensor = null;
-            TensorFloat outputTensor = null;
+            Tensor<float> inputTensor = null;
+            Tensor<float> outputTensor = null;
 
             try
             {
                 // 3. Convert crop texture to Tensor
-                inputTensor = TextureConverter.ToTensor(croppedRT, TargetSize, TargetSize, TargetChannels);
+                inputTensor = new Tensor<float>(new TensorShape(1, TargetChannels, TargetSize, TargetSize));
+                TextureConverter.ToTensor(croppedRT, inputTensor);
 
                 // 4. Run inference
-                worker.Execute(inputTensor);
+                worker.Schedule(inputTensor);
                 worker.FinishExecution();
 
                 // 5. Retrieve output keypoints
-                outputTensor = worker.PeekOutput() as TensorFloat;
+                outputTensor = worker.PeekOutput() as Tensor<float>;
                 float[] handJointsFlat = outputTensor.DownloadToArray();
 
                 // 6. Decode joint positions to parent-relative finger rotations

@@ -6,7 +6,7 @@
  */
 
 using UnityEngine;
-using Unity.Sentis;
+using Unity.InferenceEngine;
 using System;
 using System.Collections.Generic;
 
@@ -19,7 +19,7 @@ namespace GhostRigAI
     public class AudioToBlendshapeEngine : IDisposable
     {
         private Model runtimeModel;
-        private IWorker worker;
+        private Worker worker;
         private const int SampleWindowSize = 1024; // Standard context window for acoustic extraction
 
         // Standard ARKit Facial Blendshape mapping (52 shape indices or subset)
@@ -53,7 +53,7 @@ namespace GhostRigAI
             }
 
             runtimeModel = ModelLoader.Load(faceModelAsset);
-            worker = WorkerFactory.CreateWorker(BackendType.GPUCompute, runtimeModel);
+            worker = new Worker(runtimeModel, BackendType.GPUCompute);
         }
 
         /// <summary>
@@ -104,20 +104,20 @@ namespace GhostRigAI
                 return blendshapes;
             }
 
-            TensorFloat inputTensor = null;
-            TensorFloat outputTensor = null;
+            Tensor<float> inputTensor = null;
+            Tensor<float> outputTensor = null;
 
             try
             {
                 // 3. Create input Tensor representing the audio signal (1 x SampleWindowSize)
-                inputTensor = new TensorFloat(new TensorShape(1, SampleWindowSize), audioSamples);
+                inputTensor = new Tensor<float>(new TensorShape(1, SampleWindowSize), audioSamples);
 
                 // 4. Run inference
-                worker.Execute(inputTensor);
+                worker.Schedule(inputTensor);
                 worker.FinishExecution();
 
                 // 5. Retrieve output weights
-                outputTensor = worker.PeekOutput() as TensorFloat;
+                outputTensor = worker.PeekOutput() as Tensor<float>;
                 float[] rawWeights = outputTensor.DownloadToArray();
 
                 // 6. Decode output array to ARKit blendshape name dictionary

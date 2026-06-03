@@ -6,7 +6,7 @@
  */
 
 using UnityEngine;
-using Unity.Sentis;
+using Unity.InferenceEngine;
 using System;
 
 namespace GhostRigAI
@@ -18,7 +18,7 @@ namespace GhostRigAI
     public class SentisOfflineEngine : IDisposable
     {
         private Model runtimeModel;
-        private IWorker worker;
+        private Worker worker;
 
         /// <summary>
         /// Initializes the Neural Engine by loading the ONNX model and spawning a GPU Compute worker.
@@ -37,7 +37,7 @@ namespace GhostRigAI
                 runtimeModel = ModelLoader.Load(onnxModel);
 
                 // Create the worker inference engine using GPUCompute backend
-                worker = WorkerFactory.CreateWorker(BackendType.GPUCompute, runtimeModel);
+                worker = new Worker(runtimeModel, BackendType.GPUCompute);
             }
             catch (Exception ex)
             {
@@ -50,9 +50,9 @@ namespace GhostRigAI
         /// <summary>
         /// Executes inference on the input tensor and returns the raw predictions tensor.
         /// </summary>
-        /// <param name="inputTensor">The preprocessed input TensorFloat (1 x 3 x 256 x 256).</param>
-        /// <returns>The raw prediction TensorFloat representing joint poses/rotations.</returns>
-        public TensorFloat ProcessTensor(TensorFloat inputTensor)
+        /// <param name="inputTensor">The preprocessed input Tensor (1 x 3 x 256 x 256).</param>
+        /// <returns>The raw prediction Tensor representing joint poses/rotations.</returns>
+        public Tensor<float> ProcessTensor(Tensor<float> inputTensor)
         {
             if (worker == null)
             {
@@ -65,13 +65,13 @@ namespace GhostRigAI
             }
 
             // Execute inference using the input tensor
-            worker.Execute(inputTensor);
+            worker.Schedule(inputTensor);
 
             // Block the CPU thread to ensure GPU execution is complete before proceeding
             worker.FinishExecution();
 
             // Capture output tensor (non-allocating peek)
-            TensorFloat rawPredictions = worker.PeekOutput() as TensorFloat;
+            Tensor<float> rawPredictions = worker.PeekOutput() as Tensor<float>;
             
             return rawPredictions;
         }

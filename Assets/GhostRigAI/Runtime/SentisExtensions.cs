@@ -5,41 +5,23 @@
  * via any medium, is strictly prohibited. All rights reserved.
  */
 
-using Unity.Sentis;
+using Unity.InferenceEngine;
 
 namespace GhostRigAI
 {
     /// <summary>
-    /// Extension methods for Unity Sentis classes to support cross-version compatibility (Sentis 1.x vs 2.x).
+    /// Extension methods for Unity Inference Engine classes to support cross-version compatibility.
     /// </summary>
     public static class SentisExtensions
     {
         /// <summary>
-        /// Compatibility wrapper that downloads tensor data to the CPU and returns a flat float array.
-        /// Maps DownloadToArray (Sentis 2.x standard) to ToReadOnlyArray (Sentis 1.x standard).
-        /// </summary>
-        public static float[] DownloadToArray(this TensorFloat tensor)
-        {
-            if (tensor == null)
-            {
-                return null;
-            }
-
-            // Sync GPU-to-CPU data
-            tensor.MakeReadable();
-
-            // Return the read-only CPU array copy
-            return tensor.ToReadOnlyArray();
-        }
-
-        /// <summary>
         /// Extension method to ensure compatibility with worker synchronization requirements.
-        /// In Sentis, readback calls like DownloadToArray/ToReadOnlyArray automatically block
+        /// In Inference Engine 2.x, readback calls like DownloadToArray/ToReadOnlyArray automatically block
         /// the CPU until GPU processing is complete. This method serves as a semantic synchronizer.
         /// </summary>
-        public static void FinishExecution(this IWorker worker)
+        public static void FinishExecution(this Worker worker)
         {
-            // No direct blocking call exists on IWorker since operations are lazy-synchronized
+            // No direct blocking call exists on Worker since operations are lazy-synchronized
             // on data readback. This method is provided to satisfy the structural specification.
         }
     }

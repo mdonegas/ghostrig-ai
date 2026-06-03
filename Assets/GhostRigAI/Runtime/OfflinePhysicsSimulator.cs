@@ -15,7 +15,7 @@ namespace GhostRigAI
     /// </summary>
     public class OfflinePhysicsSimulator
     {
-        private bool originalAutoSimulation;
+        private SimulationMode originalSimulationMode;
 
         /// <summary>
         /// Saves the current auto-simulation status and disables automatic PhysX stepping.
@@ -23,10 +23,10 @@ namespace GhostRigAI
         public void StartManualSimulation()
         {
             // Cache the original state to prevent breaking the editor/game state when baking ends
-            originalAutoSimulation = Physics.autoSimulation;
+            originalSimulationMode = Physics.simulationMode;
             
             // Force disable auto-simulation to put PhysX under manual script control
-            Physics.autoSimulation = false;
+            Physics.simulationMode = SimulationMode.Script;
         }
 
         /// <summary>
@@ -47,7 +47,7 @@ namespace GhostRigAI
         public void StopManualSimulation()
         {
             // Restore original physics behavior
-            Physics.autoSimulation = originalAutoSimulation;
+            Physics.simulationMode = originalSimulationMode;
         }
     }
 }
