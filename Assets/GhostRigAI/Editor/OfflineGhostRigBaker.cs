@@ -11,20 +11,22 @@ using UnityEngine.Video;
 using Unity.Sentis;
 using System;
 using System.Threading.Tasks;
+using GhostRigAI;
 
 namespace GhostRigAI.Editor
 {
     /// <summary>
-    /// Editor Window interface and main orchestrator loop for GhostRig AI Phase 1.
-    /// Controls deterministic video frame extraction, tensor conversion, and memory management.
+    /// Editor Window interface and main orchestrator loop for GhostRig AI.
+    /// Manages Phase 1 (Vision Ingestion) and Phase 2 (Neural Engine Inference) sequentially.
     /// </summary>
     public class OfflineGhostRigBaker : EditorWindow
     {
-        // System Inputs
+        // System Inputs (Phase 1 & 2)
         private VideoClip sourceVideo;
+        private ModelAsset onnxModel;
         private int targetFramerate = 30;
 
-        // Ingestion State
+        // Ingestion & Inference State
         private bool isBaking = false;
         private long currentFrameIndex = 0;
         private long totalFrames = 0;
@@ -47,13 +49,12 @@ namespace GhostRigAI.Editor
         public static void ShowWindow()
         {
             OfflineGhostRigBaker window = GetWindow<OfflineGhostRigBaker>("GhostRig AI - Offline Baker");
-            window.minSize = new Vector2(450, 480);
+            window.minSize = new Vector2(450, 520);
             window.Show();
         }
 
         private void OnEnable()
         {
-            // Register an update callback to keep the UI responsive during async operations
             EditorApplication.update += Repaint;
         }
 
@@ -144,6 +145,8 @@ namespace GhostRigAI.Editor
             GUILayout.BeginVertical(EditorStyles.helpBox);
             
             sourceVideo = (VideoClip)EditorGUILayout.ObjectField("Source Video Clip", sourceVideo, typeof(VideoClip), false);
+            onnxModel = (ModelAsset)EditorGUILayout.ObjectField("Neural Network Model", onnxModel, typeof(ModelAsset), false);
+            
             targetFramerate = EditorGUILayout.IntPopup("Target Framerate", targetFramerate, 
                 new string[] { "30 FPS", "60 FPS" }, 
                 new int[] { 30, 60 });
@@ -176,12 +179,11 @@ namespace GhostRigAI.Editor
         {
             if (!isBaking) return;
 
-            GUILayout.Label("3. INGESTION PROGRESS", sectionTitleStyle);
+            GUILayout.Label("3. ORCHESTRATION PROGRESS", sectionTitleStyle);
             GUILayout.BeginVertical(EditorStyles.helpBox);
 
-            // Progress bar label
             float pct = progress * 100f;
-            GUILayout.Label($"Baking Phase 1: {pct:F1}% ({currentFrameIndex}/{totalFrames} Frames)");
+            GUILayout.Label($"Processing: {pct:F1}% ({currentFrameIndex}/{totalFrames} Frames)");
 
             // Custom styled progress bar (Gradient Effect)
             Rect rect = GUILayoutUtility.GetRect(18, 18, GUILayout.ExpandWidth(true));
@@ -211,9 +213,9 @@ namespace GhostRigAI.Editor
         {
             GUILayout.FlexibleSpace();
 
-            if (sourceVideo == null)
+            if (sourceVideo == null || onnxModel == null)
             {
-                EditorGUILayout.HelpBox("Please assign a source Video Clip to begin baking.", MessageType.Info);
+                EditorGUILayout.HelpBox("Please assign a source Video Clip and a Neural Network Model to begin baking.", MessageType.Info);
                 return;
             }
 
@@ -222,7 +224,7 @@ namespace GhostRigAI.Editor
                 Color oldColor = GUI.backgroundColor;
                 GUI.backgroundColor = primaryColor;
                 
-                if (GUILayout.Button("▶ START BAKE & VISION INGESTION", buttonStyle))
+                if (GUILayout.Button("▶ START PIPELINE BAKE", buttonStyle))
                 {
                     StartBakingProcess();
                 }
@@ -255,9 +257,13 @@ namespace GhostRigAI.Editor
 
             VideoPlayer player = null;
             RenderTexture renderTexture = null;
+            SentisOfflineEngine neuralEngine = null;
 
             try
             {
+                statusText = "Setting up Neural Engine...";
+                neuralEngine = new SentisOfflineEngine(onnxModel);
+
                 statusText = "Setting up Video Extractor...";
                 player = VideoFrameExtractor.SetupExtractor(sourceVideo, out renderTexture);
 
@@ -265,7 +271,7 @@ namespace GhostRigAI.Editor
                 await VideoFrameExtractor.PrepareVideoAsync(player);
 
                 totalFrames = (long)player.frameCount;
-                statusText = $"Starting Main Ingestion Loop ({totalFrames} frames)...";
+                statusText = $"Starting Execution Loop ({totalFrames} frames)...";
 
                 // Master Loop
                 for (long frame = 0; frame < totalFrames; frame++)
@@ -280,13 +286,12 @@ namespace GhostRigAI.Editor
                     progress = (float)frame / totalFrames;
                     statusText = $"Extracting frame {frame}...";
 
-                    // Force editor rendering refresh if running in edit mode
                     if (!Application.isPlaying)
                     {
                         EditorApplication.QueuePlayerLoopUpdate();
                     }
 
-                    // Await the sendFrameReadyEvents before proceeding
+                    // Await the sendFrameReadyEvents (Phase 1)
                     bool frameReady = await VideoFrameExtractor.SeekToFrameAsync(player, frame);
                     if (!frameReady)
                     {
@@ -294,25 +299,33 @@ namespace GhostRigAI.Editor
                         continue;
                     }
 
-                    statusText = $"Converting frame {frame} to Sentis Tensor...";
+                    statusText = $"Preprocessing frame {frame}...";
 
-                    // Convert to Tensor
-                    using (TensorFloat tensor = SentisTensorConverter.ConvertToTensor(renderTexture))
+                    // Preprocess and Convert to Tensor (Phase 1 Output)
+                    TensorFloat inputTensor = SentisTensorConverter.ConvertToTensor(renderTexture);
+
+                    statusText = $"Running Neural Inference on frame {frame}...";
+
+                    // Neural Engine Inference (Phase 2 Output)
+                    TensorFloat rawPredictions = neuralEngine.ProcessTensor(inputTensor);
+
+                    // Extract the raw predictions data
+                    float[] predictionValues = rawPredictions.DownloadToArray();
+
+                    // Print progress validation log to Console
+                    if (frame % 30 == 0 || frame == totalFrames - 1)
                     {
-                        // Ensure tensor is loaded and readable (blocking call to verify values)
-                        tensor.MakeReadable();
-                        float[] data = tensor.ToReadOnlyArray();
-
-                        // Print layout validation log to Console
-                        if (frame % 30 == 0 || frame == totalFrames - 1)
-                        {
-                            Debug.Log($"[GhostRig AI] Frame {frame} successfully converted. Shape: {string.Join("x", tensor.shape)}. Elements: {data.Length} values.");
-                        }
-
-                        // IMPORTANT: Memory Management
-                        // In an expanded system, this tensor would be passed to the prediction model.
-                        // Here, the 'using' block disposes of the CPU/GPU memory of the tensor immediately.
+                        string inputShapeStr = string.Join("x", inputTensor.shape);
+                        string outputShapeStr = string.Join("x", rawPredictions.shape);
+                        Debug.Log($"[GhostRig AI] Frame {frame} successfully baked. " +
+                                  $"Input Tensor Shape: {inputShapeStr} | " +
+                                  $"Output Tensor Shape: {outputShapeStr} | " +
+                                  $"Predictions Size: {predictionValues.Length} values.");
                     }
+
+                    // CRITICAL: Memory Management (Disposing of unmanaged resources immediately)
+                    rawPredictions.Dispose();
+                    inputTensor.Dispose();
 
                     // Await next frame logic
                     await Task.Yield();
@@ -323,7 +336,7 @@ namespace GhostRigAI.Editor
                     progress = 1.0f;
                     currentFrameIndex = totalFrames;
                     statusText = "Completed successfully!";
-                    Debug.Log($"[GhostRig AI] Offline Ingestion completed. Total processed: {totalFrames} frames in {stopwatch.Elapsed:mm\\:ss}.");
+                    Debug.Log($"[GhostRig AI] Offline Orchestration completed. Total processed: {totalFrames} frames in {stopwatch.Elapsed:mm\\:ss}.");
                 }
             }
             catch (Exception ex)
@@ -334,7 +347,13 @@ namespace GhostRigAI.Editor
             finally
             {
                 statusText = "Cleaning up resources...";
+                
+                // Dispose of VideoPlayer resources
                 VideoFrameExtractor.Cleanup(player, renderTexture);
+                
+                // Dispose of Neural Engine resources
+                neuralEngine?.Dispose();
+                
                 stopwatch.Stop();
                 isBaking = false;
             }
