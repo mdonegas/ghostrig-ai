@@ -151,5 +151,75 @@ namespace GhostRigAI
 
             return tpose;
         }
+
+        private static readonly Dictionary<HumanBodyBones, HumanBodyBones> BoneParents = new Dictionary<HumanBodyBones, HumanBodyBones>
+        {
+            { HumanBodyBones.Spine, HumanBodyBones.Hips },
+            { HumanBodyBones.Chest, HumanBodyBones.Spine },
+            { HumanBodyBones.Neck, HumanBodyBones.Chest },
+            { HumanBodyBones.Head, HumanBodyBones.Neck },
+            
+            { HumanBodyBones.LeftUpperArm, HumanBodyBones.Chest },
+            { HumanBodyBones.LeftLowerArm, HumanBodyBones.LeftUpperArm },
+            
+            { HumanBodyBones.RightUpperArm, HumanBodyBones.Chest },
+            { HumanBodyBones.RightLowerArm, HumanBodyBones.RightUpperArm },
+            
+            { HumanBodyBones.LeftUpperLeg, HumanBodyBones.Hips },
+            { HumanBodyBones.LeftLowerLeg, HumanBodyBones.LeftUpperLeg },
+            
+            { HumanBodyBones.RightUpperLeg, HumanBodyBones.Hips },
+            { HumanBodyBones.RightLowerLeg, HumanBodyBones.RightUpperLeg },
+            
+            // Left Hand Fingers
+            { HumanBodyBones.LeftThumbIntermediate, HumanBodyBones.LeftThumbProximal },
+            { HumanBodyBones.LeftThumbDistal, HumanBodyBones.LeftThumbIntermediate },
+            { HumanBodyBones.LeftIndexIntermediate, HumanBodyBones.LeftIndexProximal },
+            { HumanBodyBones.LeftIndexDistal, HumanBodyBones.LeftIndexIntermediate },
+            { HumanBodyBones.LeftMiddleIntermediate, HumanBodyBones.LeftMiddleProximal },
+            { HumanBodyBones.LeftMiddleDistal, HumanBodyBones.LeftMiddleIntermediate },
+            { HumanBodyBones.LeftRingIntermediate, HumanBodyBones.LeftRingProximal },
+            { HumanBodyBones.LeftRingDistal, HumanBodyBones.LeftRingIntermediate },
+            { HumanBodyBones.LeftLittleIntermediate, HumanBodyBones.LeftLittleProximal },
+            { HumanBodyBones.LeftLittleDistal, HumanBodyBones.LeftLittleIntermediate },
+            
+            // Right Hand Fingers
+            { HumanBodyBones.RightThumbIntermediate, HumanBodyBones.RightThumbProximal },
+            { HumanBodyBones.RightThumbDistal, HumanBodyBones.RightThumbIntermediate },
+            { HumanBodyBones.RightIndexIntermediate, HumanBodyBones.RightIndexProximal },
+            { HumanBodyBones.RightIndexDistal, HumanBodyBones.RightIndexIntermediate },
+            { HumanBodyBones.RightMiddleIntermediate, HumanBodyBones.RightMiddleProximal },
+            { HumanBodyBones.RightMiddleDistal, HumanBodyBones.RightMiddleIntermediate },
+            { HumanBodyBones.RightRingIntermediate, HumanBodyBones.RightRingProximal },
+            { HumanBodyBones.RightRingDistal, HumanBodyBones.RightRingIntermediate },
+            { HumanBodyBones.RightLittleIntermediate, HumanBodyBones.RightLittleProximal },
+            { HumanBodyBones.RightLittleDistal, HumanBodyBones.RightLittleIntermediate }
+        };
+
+        /// <summary>
+        /// Converts absolute/world humanoid orientations into parent-relative local orientations in-place.
+        /// </summary>
+        /// <param name="pose">The dictionary of bone rotations to convert.</param>
+        public static void ConvertToLocalRotations(Dictionary<HumanBodyBones, Quaternion> pose)
+        {
+            if (pose == null) return;
+
+            // Clone absolute rotations so we can read original values during conversion
+            var absPose = new Dictionary<HumanBodyBones, Quaternion>(pose);
+
+            foreach (var kvp in absPose)
+            {
+                HumanBodyBones bone = kvp.Key;
+                Quaternion absRot = kvp.Value;
+
+                if (BoneParents.TryGetValue(bone, out HumanBodyBones parentBone))
+                {
+                    if (absPose.TryGetValue(parentBone, out Quaternion parentAbsRot))
+                    {
+                        pose[bone] = Quaternion.Inverse(parentAbsRot) * absRot;
+                    }
+                }
+            }
+        }
     }
 }

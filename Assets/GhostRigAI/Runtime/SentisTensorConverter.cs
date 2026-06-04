@@ -66,11 +66,11 @@ namespace GhostRigAI
             Tensor<float> tensor = null;
             try
             {
-                // Convert the RenderTexture to a Sentis Tensor<float>
-                // Layout is batch (1) x channels (3) x height (256) x width (256)
+                // Convert the RenderTexture to a Sentis Tensor<float> in NHWC format
+                // Layout is batch (1) x height (256) x width (256) x channels (3)
                 // Values are normalized to [0.0, 1.0] by default.
-                tensor = new Tensor<float>(new TensorShape(1, TargetChannels, TargetSize, TargetSize));
-                TextureConverter.ToTensor(croppedRT, tensor);
+                tensor = new Tensor<float>(new TensorShape(1, TargetSize, TargetSize, TargetChannels));
+                TextureConverter.ToTensor(croppedRT, tensor, new TextureTransform().SetTensorLayout(TensorLayout.NHWC));
             }
             catch (Exception ex)
             {

@@ -80,8 +80,8 @@ namespace GhostRigAI
             try
             {
                 // 3. Convert crop texture to Tensor
-                inputTensor = new Tensor<float>(new TensorShape(1, TargetChannels, TargetSize, TargetSize));
-                TextureConverter.ToTensor(croppedRT, inputTensor);
+                inputTensor = new Tensor<float>(new TensorShape(1, TargetSize, TargetSize, TargetChannels));
+                TextureConverter.ToTensor(croppedRT, inputTensor, new TextureTransform().SetTensorLayout(TensorLayout.NHWC));
 
                 // 4. Run inference
                 worker.Schedule(inputTensor);

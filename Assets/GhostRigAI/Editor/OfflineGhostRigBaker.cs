@@ -239,9 +239,9 @@ namespace GhostRigAI.Editor
         {
             GUILayout.FlexibleSpace();
 
-            if (sourceVideo == null || onnxModel == null || handModel == null || faceModel == null || avatar == null)
+            if (sourceVideo == null || onnxModel == null || handModel == null || avatar == null)
             {
-                EditorGUILayout.HelpBox("Please assign all required assets (Video, Audio, Body/Hand/Face models, and the physical Avatar) to begin baking.", MessageType.Info);
+                EditorGUILayout.HelpBox("Please assign all required assets (Video, Body/Hand models, and the physical Avatar) to begin baking. Audio and Facial models are optional.", MessageType.Info);
                 return;
             }
 
@@ -301,7 +301,10 @@ namespace GhostRigAI.Editor
                 statusText = "Setting up Neural Engines...";
                 bodyEngine = new SentisOfflineEngine(onnxModel);
                 handEngine = new HandMicroCropper(handModel);
-                faceEngine = new AudioToBlendshapeEngine(faceModel);
+                if (faceModel != null)
+                {
+                    faceEngine = new AudioToBlendshapeEngine(faceModel);
+                }
 
                 statusText = "Setting up Physics Simulator...";
                 physicsSimulator.StartManualSimulation();
@@ -390,7 +393,11 @@ namespace GhostRigAI.Editor
                     statusText = $"Processing Facial Audio on frame {frame}...";
 
                     // Phase 5: Facial Audio (Audio2Face)
-                    Dictionary<string, float> facePose = faceEngine.ProcessAudio(voiceTrack, (int)frame, targetFramerate);
+                    Dictionary<string, float> facePose = null;
+                    if (faceEngine != null)
+                    {
+                        facePose = faceEngine.ProcessAudio(voiceTrack, (int)frame, targetFramerate);
+                    }
 
                     // 6. Compile the complete "Master Frame State"
                     MasterFrameState masterState = new MasterFrameState
@@ -416,12 +423,21 @@ namespace GhostRigAI.Editor
                         masterState.BoneRotations[kvp.Key] = kvp.Value;
                     }
                     // Merge Face Blendshapes
-                    foreach (var kvp in facePose)
+                    if (facePose != null)
                     {
-                        masterState.BlendshapeWeights[kvp.Key] = kvp.Value;
+                        foreach (var kvp in facePose)
+                        {
+                            masterState.BlendshapeWeights[kvp.Key] = kvp.Value;
+                        }
                     }
 
                     statusText = $"Applying physics constraints on frame {frame}...";
+
+                    // Solve Tether Constraint (Silver Cord) and apply IK corrections back to absolute pose
+                    TetherConstraintIK.SolveTether(ref masterState.HipsPosition, masterState.BoneRotations, anchorPoint, maxTetherLength);
+
+                    // Convert absolute rotations to parent-relative local rotations
+                    PoseDecoder.ConvertToLocalRotations(masterState.BoneRotations);
 
                     // Phase 6: Apply pose to physical avatar using Animator.SetBoneLocalRotation
                     foreach (var kvp in masterState.BoneRotations)
@@ -429,25 +445,16 @@ namespace GhostRigAI.Editor
                         avatar.SetBoneLocalRotation(kvp.Key, kvp.Value);
                     }
 
-                    // Position Hips relative to raw predicted hips root
+                    // Position Hips relative to resolved hips root
                     Transform hipsTransform = avatar.GetBoneTransform(HumanBodyBones.Hips);
-                    if (hipsTransform != null)
-                    {
-                        hipsTransform.position = masterState.HipsPosition;
-                    }
-
-                    // Execute Physics step manually (Advancing PhysX scene)
-                    physicsSimulator.SimulateStep(stepTime);
-
-                    // Solve Tether Constraint (Silver Cord) and apply IK corrections back to pose
-                    TetherConstraintIK.SolveTether(ref masterState.HipsPosition, masterState.BoneRotations, anchorPoint, maxTetherLength);
-
-                    // Update avatar hips to reflect resolved Tether position
                     if (hipsTransform != null)
                     {
                         hipsTransform.position = masterState.HipsPosition;
                         hipsTransform.localRotation = masterState.BoneRotations[HumanBodyBones.Hips];
                     }
+
+                    // Execute Physics step manually (Advancing PhysX scene)
+                    physicsSimulator.SimulateStep(stepTime);
 
                     // Update visual telemetry in Scene View
                     Transform leftWristTransform = avatar.GetBoneTransform(HumanBodyBones.LeftHand);
